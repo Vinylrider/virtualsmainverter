@@ -11,7 +11,7 @@ The software summarizes all supply values and counters and creates an virtual SM
 Example output :<br>
 <b>SMA-EM Serial:1900888888</b><br>
 ----sum----<br>
-P: consume:0.0W 0.0kWh supply:16486.8W 116573.354kWh<br>
+P: consume:0.0W 0.0kWh <u>supply:16486.8W 116573.354kWh</u><br>
 S: consume:0.0VA 0.0kVAh supply:0.0VA 0.0VAh<br>
 Q: cap 0.0var 0.0kvarh ind 0.0var 0.0kvarh<br>
 cos phi:0.0Â°<br>
