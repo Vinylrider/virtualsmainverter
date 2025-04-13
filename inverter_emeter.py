@@ -7,14 +7,15 @@ import logging
 import time
 import json
 import requests
+from datetime import datetime
 from emeter2 import emeterPacket
 from sma_speedwire import SMA_SPEEDWIRE, smaError
 
 # SMA inverters (IP-address, installer password)
 inverters = [
-    ("192.168.1.62", "your-sma-password"),
-    ("192.168.1.63", "your-sma-password!"),
-    ("192.168.1.64", "your-sma-password!")
+    ("192.168.1.62", "mysmapassword"),
+    ("192.168.1.63", "mysmapassword"),
+    ("192.168.1.64", "mysmapassword")
 ]
 
 # Hoymiles inverters: List of API-URLs
@@ -27,9 +28,11 @@ MULTICAST_GRP = '239.12.255.254'
 MULTICAST_PORT = 9522
 
 logging.basicConfig(
-    filename='/var/log/sma_virtual_emeter.log',  # Log-Dateipfad
+    filename='/var/log/sma_inverter_emeter.log',  # Log-Dateipfad
+    filemode='a',
     level=logging.INFO,
-    format='[%(levelname)s] %(message)s'
+    format='[%(asctime)s] [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 
 # Redirect errors and output to log file
@@ -163,41 +166,67 @@ send_sock = setup_sender_socket()
 send_sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 32)
 
 while True:
-    total_power = 0.0
-    total_energy = 0.0
+    try:
+        total_power = 0.0
+        total_energy = 0.0
+        log_parts = []
 
-    # --- Get SMA data ---
-    for dev in sma_devices:
-        try:
-            dev.update()
-            total_power += float(dev.sensors["power_ac_total"]["value"] or 0.0)
-            total_energy += float(dev.sensors["energy_total"]["value"] or 0.0)
-        except smaError as e:
-            print(f"[SMA Update] Error at {dev.host}: {e}")
+        # --- Get SMA data ---
+        for dev in sma_devices:
+            try:
+                dev.update()
+                p = float(dev.sensors["power_ac_total"]["value"] or 0.0)
+                e = float(dev.sensors["energy_total"]["value"] or 0.0)
+                if p > 0:
+                    total_power += p
+                if e > 0:
+                    total_energy += e
+                log_parts.append(f"SMA:{dev.host} P={round(p, 2)}W E={round(e, 3)}kWh")
+            except smaError as e:
+                logging.error(f"[SMA Update] Error at {dev.host}: {e}")
 
-    # --- Get Hoymiles data ---
-    for url in hoymiles_urls:
+        # --- Get Hoymiles data ---
+        for url in hoymiles_urls:
+            try:
+                response = requests.get(url, timeout=2)
+                data = response.json()
+                p_val = data["total"]["Power"]["v"]
+                p_unit = data["total"]["Power"]["u"]
+                p = normalize_power(p_val, p_unit)
+                if p > 0:
+                    total_power += p
+                e_val = data["total"]["YieldTotal"]["v"]
+                e_unit = data["total"]["YieldTotal"]["u"]
+                e = normalize_energy(e_val, e_unit)
+                if e > 0:
+                    total_energy += e
+                log_parts.append(f"Hoymiles:{url.split('/')[2]} P={round(p, 2)}W E={round(e, 3)}kWh")
+            except Exception as e:
+                logging.error(f"[Hoymiles] Error at {url}: {e}")
+
+        # --- Compose and send emulation packet ---
+        result = {
+            "psupply": round(total_power, 2),
+            "psupplyunit": "W",
+            "psupplycounter": round(total_energy, 3),
+            "psupplycounterunit": "kWh",
+        }
+
         try:
-            response = requests.get(url, timeout=2)
-            data = response.json()
-            # Power
-            p_val = data["total"]["Power"]["v"]
-            p_unit = data["total"]["Power"]["u"]
-            total_power += normalize_power(p_val, p_unit)
-            # Energy
-            e_val = data["total"]["YieldTotal"]["v"]
-            e_unit = data["total"]["YieldTotal"]["u"]
-            total_energy += normalize_energy(e_val, e_unit)
+            parse_and_emulate(result, send_sock)
         except Exception as e:
-            print(f"[Hoymiles] Error at {url}: {e}")
+            logging.error(f"[Emulation] Error while sending emulated data: {e}")
 
-    # --- Result-JSON ---
-    result = {
-        "psupply": round(total_power, 2),
-        "psupplyunit": "W",
-        "psupplycounter": round(total_energy, 3),
-        "psupplycounterunit": "kWh",
-    }
-    parse_and_emulate(result, send_sock)
-    print(json.dumps(result, indent=2))
-    time.sleep(3)
+#    print(json.dumps(result, indent=2))
+        log_parts.append(f"SUM: P={round(total_power, 2)}W E={round(total_energy, 3)}kWh")
+        logging.info(" | ".join(log_parts))
+
+        if total_power == 0:
+            logging.info("No value received or zero - Waiting 60 seconds.")
+            time.sleep(60)
+        else:
+            time.sleep(3)
+
+    except Exception as e:
+        logging.critical(f"[MAIN LOOP] Uncaught exception: {e}", exc_info=True)
+        time.sleep(10)
