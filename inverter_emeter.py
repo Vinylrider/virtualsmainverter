@@ -11,16 +11,16 @@ from datetime import datetime
 from emeter2 import emeterPacket
 from sma_speedwire import SMA_SPEEDWIRE, smaError
 
-# SMA inverters (IP-address, installer password)
+# SMA inverters (IP-address, installer password, max_watt_limit)
 inverters = [
-    ("192.168.1.62", "mysmapassword"),
-    ("192.168.1.63", "mysmapassword"),
-    ("192.168.1.64", "mysmapassword")
+    ("192.168.1.62", "my-sma-password", 15000),
+    ("192.168.1.63", "my-sma-password", 15000),
+    ("192.168.1.64", "my-sma-password", 15000)
 ]
 
-# Hoymiles inverters: List of API-URLs
-hoymiles_urls = [
-    "http://192.168.1.72/api/livedata/status"
+# Hoymiles inverters: (API-URL, max_watt_limit, max_consecutive_timeouts)
+hoymiles_devices = [
+    ("http://192.168.1.72/api/livedata/status", 2500, 3)
 ]
 
 VIRTUAL_METER_SN = 1900888888 # should start with 1900 and have 10 digits in total
@@ -35,6 +35,15 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# Buffer for last valid values per Hoymiles device
+hoymiles_state = {
+    url: {
+        "last_power": 0.0,
+        "last_energy": 0.0,
+        "timeouts": 0
+    } for url, _, _ in hoymiles_devices
+}
+
 # Redirect errors and output to log file
 class MyLogger:
     def write(self, message):
@@ -45,7 +54,7 @@ class MyLogger:
 
 # Init inverter objects
 sma_devices = []
-for ip, pwd in inverters:
+for ip, pwd, max_watt in inverters:
     try:
         dev = SMA_SPEEDWIRE(ip, pwd)
         dev.init()
@@ -89,7 +98,8 @@ def parse_and_emulate(data_dict, send_sock):
     
     # Total power/energy feed-in (negative) (Summierte Leistung/Energie Einspeisung (negativ))
     packet.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER, round(data_dict['psupply'] * 10))
-    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, round(data_dict['psupplycounter'] * 1000 * 3600))
+#    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, round(data_dict['psupplycounter'] * 1000 * 3600))
+    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, 0)
     
     # Reactive power (Blindleistung)
     packet.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER, 0)
@@ -172,37 +182,61 @@ while True:
         log_parts = []
 
         # --- Get SMA data ---
-        for dev in sma_devices:
+        for (ip, pwd, max_watt), dev in zip(inverters, sma_devices):
             try:
                 dev.update()
                 p = float(dev.sensors["power_ac_total"]["value"] or 0.0)
                 e = float(dev.sensors["energy_total"]["value"] or 0.0)
-                if p > 0:
+
+                if 0 < p <= max_watt:
                     total_power += p
+                else:
+                    logging.warning(f"[SMA] {ip}: Ignoring power value {p} W (limit {max_watt})")
+    
                 if e > 0:
                     total_energy += e
-                log_parts.append(f"SMA:{dev.host} P={round(p, 2)}W E={round(e, 3)}kWh")
+
+                log_parts.append(f"SMA:{ip} P={round(p, 2)}W E={round(e, 3)}kWh")
             except smaError as e:
-                logging.error(f"[SMA Update] Error at {dev.host}: {e}")
+                logging.error(f"[SMA Update] Error at {ip}: {e}")
 
         # --- Get Hoymiles data ---
-        for url in hoymiles_urls:
+        for url, max_watt, max_timeouts in hoymiles_devices:
             try:
                 response = requests.get(url, timeout=2)
                 data = response.json()
-                p_val = data["total"]["Power"]["v"]
-                p_unit = data["total"]["Power"]["u"]
-                p = normalize_power(p_val, p_unit)
-                if p > 0:
+                p_val = data.get("total", {}).get("Power", {}).get("v")
+                p_unit = data.get("total", {}).get("Power", {}).get("u")
+                e_val = data.get("total", {}).get("YieldTotal", {}).get("v")
+                e_unit = data.get("total", {}).get("YieldTotal", {}).get("u")
+
+                p = normalize_power(p_val, p_unit) if isinstance(p_val, (int, float)) else None
+                e = normalize_energy(e_val, e_unit) if isinstance(e_val, (int, float)) else None
+
+                if p is not None and 0 < p <= max_watt:
+                    hoymiles_state[url]["last_power"] = p
+                    hoymiles_state[url]["timeouts"] = 0
                     total_power += p
-                e_val = data["total"]["YieldTotal"]["v"]
-                e_unit = data["total"]["YieldTotal"]["u"]
-                e = normalize_energy(e_val, e_unit)
-                if e > 0:
+                else:
+                    logging.warning(f"[Hoymiles] {url}: Ignoring power value {p} W (limit {max_watt})")
+
+                if e is not None and e >= 0:
+                    hoymiles_state[url]["last_energy"] = e
                     total_energy += e
-                log_parts.append(f"Hoymiles:{url.split('/')[2]} P={round(p, 2)}W E={round(e, 3)}kWh")
+
+                log_parts.append(f"Hoymiles:{url.split('/')[2]} P={round(p or 0, 2)}W E={round(e or 0, 3)}kWh")
+
             except Exception as e:
-                logging.error(f"[Hoymiles] Error at {url}: {e}")
+                hoymiles_state[url]["timeouts"] += 1
+                logging.error(f"[Hoymiles] Timeout/Error at {url}: {e} (#{hoymiles_state[url]['timeouts']})")
+
+                if hoymiles_state[url]["timeouts"] <= max_timeouts:
+                    # Use last known valid value
+                    total_power += hoymiles_state[url]["last_power"]
+                    total_energy += hoymiles_state[url]["last_energy"]
+                    log_parts.append(f"Hoymiles:{url.split('/')[2]} (cached) P={round(hoymiles_state[url]['last_power'], 2)}W E={round(hoymiles_state[url]['last_energy'], 3)}kWh")
+                else:
+                    logging.warning(f"[Hoymiles] {url}: Skipping after {hoymiles_state[url]['timeouts']} timeouts")
 
         # --- Compose and send emulation packet ---
         result = {
@@ -225,7 +259,7 @@ while True:
             logging.info("No value received or zero - Waiting 60 seconds.")
             time.sleep(60)
         else:
-            time.sleep(3)
+            time.sleep(5)
 
     except Exception as e:
         logging.critical(f"[MAIN LOOP] Uncaught exception: {e}", exc_info=True)
