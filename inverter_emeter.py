@@ -98,8 +98,7 @@ def parse_and_emulate(data_dict, send_sock):
     
     # Total power/energy feed-in (negative) (Summierte Leistung/Energie Einspeisung (negativ))
     packet.addMeasurementValue(emeterPacket.SMA_NEGATIVE_ACTIVE_POWER, round(data_dict['psupply'] * 10))
-#    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, round(data_dict['psupplycounter'] * 1000 * 3600))
-    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, 0)
+    packet.addCounterValue(emeterPacket.SMA_NEGATIVE_ACTIVE_ENERGY, round(data_dict['psupplycounter'] * 1000 * 3600))
     
     # Reactive power (Blindleistung)
     packet.addMeasurementValue(emeterPacket.SMA_POSITIVE_REACTIVE_POWER, 0)
