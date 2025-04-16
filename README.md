@@ -10,9 +10,12 @@ The program also can include other SMA energy meters.
 The software summarizes all supply values and counters and creates an virtual SMA energy meter just for PV supply. You can set this virtual emeter in sunny island as supply counter.
 
 Example output :<br>
+[INFO] SMA:192.168.1.62 P=2331.0W E=34042.126kWh | SMA:192.168.1.63 P=1940.0W E=34984.384kWh | SMA:192.168.1.64 P=2796.0W E=48024.895kWh | SMAMeter:1900123456 P=826.2W E=130.787kWh | SUM: P=7893.2W E=117182.192kWh
+SUM values are sent as a virtual/emulated SMA energy meter. See example below :
+
 <b>SMA-EM Serial:1900888888</b><br>
 ----sum----<br>
-P: consume:0.0W 0.0kWh <b>supply:16486.8W 116573.354kWh</b><br>
+P: consume:0.0W 0.0kWh <b>supply:7893.2W 117182.192kWh</b><br>
 S: consume:0.0VA 0.0kVAh supply:0.0VA 0.0VAh<br>
 Q: cap 0.0var 0.0kvarh ind 0.0var 0.0kvarh<br>
 cos phi:0.0Â°<br>
