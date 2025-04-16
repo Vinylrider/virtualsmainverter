@@ -6,6 +6,7 @@ The problem with SMA Sunny Portal is that you only can choose one SMA energy met
 There are different solutions. One is my other project : https://github.com/Vinylrider/virtualsmaenergymeter
 
 But this version here reads out all SMA inverters by SMA speedwire protocol over LAN. Then reads out Hoymiles inverters by OpenDTU HTTP and gets their JSON file (which actually means you can bind in any inverter or counter, shelly, etc.. which offers JSON...).
+The program also can include other SMA energy meters.
 The software summarizes all supply values and counters and creates an virtual SMA energy meter just for PV supply. You can set this virtual emeter in sunny island as supply counter.
 
 Example output :<br>
