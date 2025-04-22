@@ -9,6 +9,8 @@ But this version here reads out all SMA inverters by SMA speedwire protocol over
 The program also can include other SMA energy meters.
 The software summarizes all supply values and counters and creates an virtual SMA energy meter just for PV supply. You can set this virtual emeter in sunny island as supply counter.
 
+This programm can optionally send values to KNX bus (with help of Linux package "knxd-tools") so you also can keep track of supply/consume in KNX and enable/control devices based on that.
+
 Example output :<br>
 [INFO] SMA:192.168.1.62 P=2331.0W E=34042.126kWh | SMA:192.168.1.63 P=1940.0W E=34984.384kWh | SMA:192.168.1.64 P=2796.0W E=48024.895kWh | SMAMeter:1900123456 P=826.2W E=130.787kWh | SUM: P=7893.2W E=117182.192kWh
 SUM values are sent as a virtual/emulated SMA energy meter. See example below :
