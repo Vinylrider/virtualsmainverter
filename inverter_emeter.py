@@ -33,6 +33,13 @@ consume_to_supply = {
 }
 meter_data = {}
 
+# KNX Integration (apt-get install knxd-tools)
+ENABLE_KNX = True
+MAIN_METER_SN = [1900242736]
+KNX_ADDRESS_GENERATION = "11/1/1"  # Value from virtual/emulated energy meter (psupply)
+KNX_ADDRESS_FEEDIN = "11/1/2"      # Value from Master-energy meter (psupply)
+KNX_ADDRESS_SUPPLY = "11/1/3"      # Value from Master-energy meter (consume)
+
 ENERGY_STATE_FILE = "/tmp/sma_last_energy.json"
 
 VIRTUAL_METER_SN = 1900888888 # should start with 1900 and have 10 digits in total
@@ -135,6 +142,36 @@ def normalize_energy(value, unit):
         return value * 1000
     else:
         raise ValueError(f"Unknown energy unit: {unit}")
+
+def float_to_dpt9_bytes(value):
+    exponent = 0
+    mantissa = int(round(value * 100))
+    sign = 0
+
+    if mantissa < 0:
+        sign = 1
+        mantissa = (~(-mantissa) + 1) & 0x7FF  # 2er-Komplement
+
+    while mantissa > 2047:
+        mantissa >>= 1
+        exponent += 1
+
+    data = ((sign << 15) | (exponent << 11) | mantissa)
+    high_byte = (data >> 8) & 0xFF
+    low_byte = data & 0xFF
+    return f"0x{high_byte:02X}", f"0x{low_byte:02X}"
+
+def knx_send(group_address, value):
+    try:
+        byte1,byte2 = float_to_dpt9_bytes(value)
+        subprocess.run(
+            ["knxtool", "groupwrite", "ip:localhost", group_address, byte1, byte2],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception as e:
+        logging.error(f"KNX send error ({group_address}): {e}")
 
 def setup_sender_socket():
     return socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
@@ -310,9 +347,13 @@ while True:
                     continue
 
                 sn = str(decoded["serial"])
-                if sn not in map(str, SUPPLY_METERS + CONSUME_METERS):
-                    continue
-
+                if ENABLE_KNX:
+                    if sn not in map(str, SUPPLY_METERS + CONSUME_METERS + MAIN_METER_SN):
+                        continue
+                else:
+                    if sn not in map(str, SUPPLY_METERS + CONSUME_METERS):
+                        continue
+                        
                 meter_data[sn] = decoded
                 logging.debug(f"Received EM data from {sn}: {decoded}")
             except socket.timeout:
@@ -353,6 +394,16 @@ while True:
             "psupplycounter": round(total_energy, 3),
             "psupplycounterunit": "kWh",
         }
+
+        if ENABLE_KNX :
+            if 'psupply' in result:
+                knx_send(KNX_ADDRESS_GENERATION, result['psupply'])
+            for sn in map(str, MAIN_METER_SN):
+                data = meter_data.get(sn)
+                if not data:
+                    continue
+                knx_send(KNX_ADDRESS_FEEDIN, data.get("psupply", 0.0))
+                knx_send(KNX_ADDRESS_SUPPLY, data.get("pconsume", 0.0))
 
         try:
             parse_and_emulate(result, send_sock)
